@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+google-generativeai
+google-cloud-texttospeech
+kokoro>=0.9.2
+openai-whisper
+Pillow
+python-dotenv
+typer
+questionary
