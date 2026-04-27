@@ -1,7 +1,7 @@
 import os
 
 from db.queries.settings import get_setting
-from media.ffmpeg import assemble_video, burn_subtitles, apply_rainbow_border
+from media.ffmpeg import assemble_video, burn_subtitles, apply_rainbow_border, get_duration
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,7 +27,8 @@ async def _render_track(
 
     if rainbow_border:
         logger.info("render: applying rainbow border %s", suffix)
-        await apply_rainbow_border(subtitled, output_path)
+        dur = await get_duration(subtitled)
+        await apply_rainbow_border(subtitled, output_path, duration=dur)
     else:
         os.rename(subtitled, output_path)
 
