@@ -8,3 +8,4 @@ Pillow
 python-dotenv
 typer
 questionary
+python-multipart
