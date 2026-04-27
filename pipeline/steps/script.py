@@ -23,65 +23,64 @@ class HumanInTheLoopPause(Exception):
 
 async def run_script_step(
     job_id: int,
-    mode: str,
+    mode: str,  # full_ai | topic_guided | manual
     topic: str | None = None,
     raw_script: str | None = None,
-    manual_override_script: bool = False,
     series_context: str | None = None,
+    manual_override_script: bool = False,
 ) -> ScriptOutput:
     client = get_ai_client()
 
     approval_threshold = int(get_setting("approval_threshold") or 90)
     max_iterations = int(get_setting("max_reviewer_iterations") or 2)
 
-    # Generate initial script
-    if manual_override_script and raw_script:
-        return ScriptOutput(full=raw_script, short=raw_script, score=None)
-
-    if mode == "manual" and raw_script:
-        initial_script = raw_script
-    elif mode == "topic_guided" and topic:
-        prompt = TOPIC_GUIDED_PROMPT.format(topic=topic)
+    # --- Generate initial script ---
+    if mode == "manual" or manual_override_script:
+        initial_script = raw_script or ""
+    elif mode == "topic_guided":
+        prompt = TOPIC_GUIDED_PROMPT.format(topic=topic or "")
         if series_context:
-            prompt += f"\n\nSeries context (previous episodes):\n{series_context}"
+            prompt += f"\n\nPrevious episode context:\n{series_context}"
         initial_script = await client.generate(prompt)
-    else:
+    else:  # full_ai
         prompt = FULL_AI_PROMPT
         if series_context:
-            prompt += f"\n\nSeries context (previous episodes):\n{series_context}"
+            prompt += f"\n\nPrevious episode context:\n{series_context}"
         initial_script = await client.generate(prompt)
 
-    # Reviewer→Modifier loop
+    # --- Manual override: skip review loop entirely ---
+    if manual_override_script:
+        return ScriptOutput(full=initial_script, short=initial_script, score=None)
+
+    # --- Reviewer → Modifier loop ---
     current_script = initial_script
-    iteration = 0
+    last_score = 0
+    last_summary = ""
 
-    while True:
+    for iteration in range(max_iterations + 1):
         reviewer_prompt = REVIEWER_PROMPT.format(script=current_script)
-        reviewer_result = await client.generate(reviewer_prompt, response_schema=REVIEWER_SCHEMA)
+        review = await client.generate(reviewer_prompt, response_schema=REVIEWER_SCHEMA)
 
-        score = reviewer_result["score"]
-        user_summary = reviewer_result["user_summary"]
+        last_score = review["score"]
+        last_summary = review["user_summary"]
 
-        if score >= approval_threshold:
+        if last_score >= approval_threshold:
             break
 
         if iteration >= max_iterations:
-            raise HumanInTheLoopPause(current_script, score, user_summary)
+            raise HumanInTheLoopPause(current_script, last_score, last_summary)
 
-        rewrite_directives = "\n".join(
-            f"- {d}" for d in reviewer_result["rewrite_directives"]
-        )
+        directives_text = "\n".join(f"- {d}" for d in review["rewrite_directives"])
         modifier_prompt = MODIFIER_PROMPT.format(
             script=current_script,
-            score=score,
-            user_summary=user_summary,
-            rewrite_directives=rewrite_directives,
+            score=last_score,
+            user_summary=last_summary,
+            rewrite_directives=directives_text,
         )
         current_script = await client.generate(modifier_prompt)
-        iteration += 1
 
-    # Tighten to short variant
+    # --- Tightener: produce short variant ---
     tightener_prompt = TIGHTENER_PROMPT.format(script=current_script)
     short_script = await client.generate(tightener_prompt)
 
-    return ScriptOutput(full=current_script, short=short_script, score=score)
+    return ScriptOutput(full=current_script, short=short_script, score=last_score)
