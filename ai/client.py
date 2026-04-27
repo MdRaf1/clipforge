@@ -1,42 +1,40 @@
 import os
-import asyncio
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
 
-_client = None
+_client: genai.Client | None = None
 
 
-def _get_client() -> genai.GenerativeModel:
+def _get_client() -> genai.Client:
     global _client
     if _client is None:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY not set in .env")
-        genai.configure(api_key=api_key)
-        _client = genai.GenerativeModel("gemini-2.0-flash-latest")
+        _client = genai.Client(api_key=api_key)
     return _client
 
 
 async def generate(prompt: str, response_schema: dict | None = None) -> str | dict:
-    loop = asyncio.get_event_loop()
+    client = _get_client()
 
-    def _call():
-        model = _get_client()
-        if response_schema:
-            import json
-            json_model = genai.GenerativeModel(
-                "gemini-2.0-flash-latest",
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                ),
-            )
-            response = json_model.generate_content(prompt)
-            return json.loads(response.text)
-        else:
-            response = model.generate_content(prompt)
-            return response.text
-
-    return await loop.run_in_executor(None, _call)
+    if response_schema:
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema,
+            ),
+        )
+        import json
+        return json.loads(response.text)
+    else:
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        return response.text
