@@ -10,6 +10,10 @@ from pipeline.checkpoint import save_step, load_checkpoint, get_resume_step
 from pipeline.steps.script import run_script_step, HumanInTheLoopPause
 from pipeline.steps.voiceover import run_voiceover_step
 from pipeline.steps.cutting import run_cutting_step
+from pipeline.steps.subtitles import run_subtitles_step
+from pipeline.steps.render import run_render_step
+from pipeline.steps.thumbnail import run_thumbnail_step
+from pipeline.steps.metadata import run_metadata_step
 from api.ws import push_event
 from utils.logger import get_logger
 
@@ -102,24 +106,89 @@ async def run(job_id: int) -> None:
     footage_full_path = cut_data["footage_full_path"]
     footage_short_path = cut_data["footage_short_path"]
 
-    # ---- Future steps (subtitles → render → thumbnail → metadata) stub ----
-    # These will be wired in step 7. Push pending events so the frontend
-    # shows them as awaiting.
-    for step in ["subtitles_full", "subtitles_short", "render_full", "render_short", "thumbnail", "metadata"]:
-        if step not in checkpoints:
-            push_event(job_id, {"type": "step_update", "step": step, "status": "pending", "message": "Waiting..."})
+    # ---- Step: subtitles_full ----
+    if _should_run("subtitles_full", resume_from, checkpoints):
+        result = await _run_step(
+            job_id, "subtitles_full", max_retries,
+            _exec_subtitles, job_id, voiceover_full_path, voiceover_short_path, output_dir,
+        )
+        if result is None:
+            return
+        checkpoints["subtitles_full"] = result
 
-    # Pipeline completes up to cutting. Steps 7+ wired in next build item.
-    update_job_status(job_id, "paused")
+    if "subtitles_short" not in checkpoints and "subtitles_full" in checkpoints:
+        save_step(job_id, "subtitles_short", checkpoints["subtitles_full"])
+        checkpoints["subtitles_short"] = checkpoints["subtitles_full"]
+        _mark_step_done_in_db(job_id, "subtitles_short", checkpoints["subtitles_full"])
+
+    srt_data = checkpoints["subtitles_full"]
+    srt_full_path = srt_data["srt_full_path"]
+    srt_short_path = srt_data["srt_short_path"]
+
+    # ---- Step: render_full ----
+    if _should_run("render_full", resume_from, checkpoints):
+        result = await _run_step(
+            job_id, "render_full", max_retries,
+            _exec_render, job_id,
+            footage_full_path, footage_short_path,
+            voiceover_full_path, voiceover_short_path,
+            srt_full_path, srt_short_path,
+            output_dir,
+        )
+        if result is None:
+            return
+        checkpoints["render_full"] = result
+
+    if "render_short" not in checkpoints and "render_full" in checkpoints:
+        save_step(job_id, "render_short", checkpoints["render_full"])
+        checkpoints["render_short"] = checkpoints["render_full"]
+        _mark_step_done_in_db(job_id, "render_short", checkpoints["render_full"])
+
+    render_data = checkpoints["render_full"]
+    video_full_path = render_data["video_full_path"]
+    video_short_path = render_data["video_short_path"]
+
+    # ---- Step: thumbnail ----
+    if _should_run("thumbnail", resume_from, checkpoints):
+        result = await _run_step(
+            job_id, "thumbnail", max_retries,
+            _exec_thumbnail, job_id, footage_full_path, script_full, output_dir,
+        )
+        if result is None:
+            return
+        checkpoints["thumbnail"] = result
+
+    thumbnail_path = checkpoints["thumbnail"]["thumbnail_path"]
+
+    # ---- Step: metadata ----
+    if _should_run("metadata", resume_from, checkpoints):
+        result = await _run_step(
+            job_id, "metadata", max_retries,
+            _exec_metadata, job_id, script_full, script_short, platform_flags, output_dir,
+            series_type, job,
+        )
+        if result is None:
+            return
+        checkpoints["metadata"] = result
+
+    metadata_path = checkpoints["metadata"]["metadata_path"]
+
+    # ---- Pipeline complete ----
+    update_job_status(
+        job_id, "complete",
+        output_video_full_path=video_full_path,
+        output_video_short_path=video_short_path,
+        output_thumbnail_path=thumbnail_path,
+        title=checkpoints["metadata"].get("metadata", {}).get("tiktok", {}).get("title", ""),
+    )
     push_event(job_id, {
-        "type": "pipeline_partial",
-        "message": "Steps 1–5 complete. Steps 6–11 wired in next build.",
-        "voiceover_full": voiceover_full_path,
-        "voiceover_short": voiceover_short_path,
-        "footage_full": footage_full_path,
-        "footage_short": footage_short_path,
+        "type": "complete",
+        "video_full": video_full_path,
+        "video_short": video_short_path,
+        "thumbnail": thumbnail_path,
+        "metadata": metadata_path,
     })
-    logger.info("runner: job %d partial complete (steps 1–5 done)", job_id)
+    logger.info("runner: job %d complete", job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +268,86 @@ async def _exec_cutting(job_id: int, footage_path: str, output_dir: str) -> dict
         job_id=job_id,
         footage_path=footage_path,
         output_dir=output_dir,
+    )
+
+
+async def _exec_subtitles(
+    job_id: int,
+    voiceover_full_path: str,
+    voiceover_short_path: str,
+    output_dir: str,
+) -> dict:
+    return await run_subtitles_step(
+        job_id=job_id,
+        voiceover_full_path=voiceover_full_path,
+        voiceover_short_path=voiceover_short_path,
+        output_dir=output_dir,
+    )
+
+
+async def _exec_render(
+    job_id: int,
+    footage_full_path: str,
+    footage_short_path: str,
+    voiceover_full_path: str,
+    voiceover_short_path: str,
+    srt_full_path: str,
+    srt_short_path: str,
+    output_dir: str,
+) -> dict:
+    return await run_render_step(
+        job_id=job_id,
+        footage_full_path=footage_full_path,
+        footage_short_path=footage_short_path,
+        voiceover_full_path=voiceover_full_path,
+        voiceover_short_path=voiceover_short_path,
+        srt_full_path=srt_full_path,
+        srt_short_path=srt_short_path,
+        output_dir=output_dir,
+    )
+
+
+async def _exec_thumbnail(
+    job_id: int,
+    footage_full_path: str,
+    script_full: str,
+    output_dir: str,
+) -> dict:
+    return await run_thumbnail_step(
+        job_id=job_id,
+        footage_full_path=footage_full_path,
+        script_full=script_full,
+        output_dir=output_dir,
+    )
+
+
+async def _exec_metadata(
+    job_id: int,
+    script_full: str,
+    script_short: str,
+    platform_flags: list[str],
+    output_dir: str,
+    series_type: str,
+    job: dict,
+) -> dict:
+    series_name = None
+    episode_number = None
+    if series_type in ("first_episode", "continuation") and job.get("series_id"):
+        from db.queries.series import get_series
+        series = get_series(job["series_id"])
+        if series:
+            series_name = series.get("name")
+            episode_number = job.get("episode_number")
+
+    return await run_metadata_step(
+        job_id=job_id,
+        script_full=script_full,
+        script_short=script_short,
+        platform_flags=platform_flags,
+        output_dir=output_dir,
+        series_type=series_type,
+        series_name=series_name,
+        episode_number=episode_number,
     )
 
 
