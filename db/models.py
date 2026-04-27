@@ -50,9 +50,23 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at                 TEXT NOT NULL,
     output_video_full_path     TEXT,
     output_video_short_path    TEXT,
-    output_thumbnail_path      TEXT
+    output_thumbnail_path      TEXT,
+    generation_mode            TEXT DEFAULT 'full_ai',
+    topic                      TEXT,
+    raw_script                 TEXT,
+    manual_override_script     INTEGER DEFAULT 0,
+    manual_override_voiceover  INTEGER DEFAULT 0
 );
 """
+
+# Columns added after initial schema — applied via ALTER TABLE for existing DBs
+_JOBS_MIGRATIONS = [
+    "ALTER TABLE jobs ADD COLUMN generation_mode TEXT DEFAULT 'full_ai'",
+    "ALTER TABLE jobs ADD COLUMN topic TEXT",
+    "ALTER TABLE jobs ADD COLUMN raw_script TEXT",
+    "ALTER TABLE jobs ADD COLUMN manual_override_script INTEGER DEFAULT 0",
+    "ALTER TABLE jobs ADD COLUMN manual_override_voiceover INTEGER DEFAULT 0",
+]
 
 CREATE_JOB_STEPS = """
 CREATE TABLE IF NOT EXISTS job_steps (
@@ -107,3 +121,11 @@ def init_db():
                 "INSERT OR IGNORE INTO settings (setting_key, setting_value) VALUES (?, ?)",
                 (key, value),
             )
+
+        # Apply migrations for existing DBs (ALTER TABLE IF NOT EXISTS is not SQLite syntax,
+        # so we swallow "duplicate column" errors)
+        for migration in _JOBS_MIGRATIONS:
+            try:
+                conn.execute(migration)
+            except Exception:
+                pass
