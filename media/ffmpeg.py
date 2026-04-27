@@ -1,6 +1,10 @@
 import asyncio
 import json
 
+# Target: 1080x1920 vertical (9:16) for all short-form platforms
+TARGET_W = 1080
+TARGET_H = 1920
+
 
 async def _run(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
@@ -26,17 +30,29 @@ async def get_duration(input_path: str) -> float:
 
 
 async def cut_footage(input_path: str, output_path: str, start: float, duration: float) -> None:
+    # Re-encode while cutting so the output is already 9:16 portrait.
+    # crop=1080:1920 takes a centre-crop of the landscape frame, then scales to
+    # exact target in case the source isn't exactly 16:9.
+    vf = (
+        f"crop=ih*{TARGET_W}/{TARGET_H}:ih,"
+        f"scale={TARGET_W}:{TARGET_H}:flags=lanczos,"
+        f"setsar=1"
+    )
     await _run(
         "ffmpeg", "-y",
         "-ss", str(start),
         "-i", input_path,
         "-t", str(duration),
-        "-c", "copy",
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
         output_path,
     )
 
 
 async def assemble_video(video_path: str, audio_path: str, output_path: str) -> None:
+    # Footage is already 9:16 from cut_footage; just mux audio.
     await _run(
         "ffmpeg", "-y",
         "-i", video_path,
@@ -51,51 +67,63 @@ async def assemble_video(video_path: str, audio_path: str, output_path: str) -> 
 
 
 async def burn_subtitles(input_path: str, srt_path: str, output_path: str) -> None:
+    # FontSize 24 looks good on 1920-tall portrait frames.
+    # Escape colons/backslashes in the path for the subtitles filter.
+    safe_path = srt_path.replace("\\", "/").replace(":", "\\:")
     subtitle_filter = (
-        f"subtitles={srt_path}:force_style='FontName=Arial,Bold=1,"
-        f"FontSize=18,PrimaryColour=&Hffffff,OutlineColour=&H000000,"
-        f"Outline=2,Alignment=2,MarginV=80'"
+        f"subtitles={safe_path}:force_style='FontName=Arial,Bold=1,"
+        f"FontSize=24,PrimaryColour=&H00ffffff,OutlineColour=&H00000000,"
+        f"Outline=2,Shadow=1,Alignment=2,MarginV=120'"
     )
     await _run(
         "ffmpeg", "-y",
         "-i", input_path,
         "-vf", subtitle_filter,
-        "-c:v", "libx264",
+        "-c:v", "libx264", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         output_path,
     )
 
 
-async def apply_rainbow_border(input_path: str, output_path: str, thickness: int = 8) -> None:
-    # pad adds border space; geq fills it with a hue-cycling spatial gradient
-    pad_filter = f"pad=iw+{thickness*2}:ih+{thickness*2}:{thickness}:{thickness}"
+async def apply_rainbow_border(input_path: str, output_path: str, thickness: int = 16) -> None:
+    # pad adds border space around the 1080x1920 frame.
+    # geq fills only the border pixels with a hue-cycling RGB gradient.
+    # The geq expressions use lum() to detect border pixels and replace them.
+    tw = TARGET_W + thickness * 2
+    th = TARGET_H + thickness * 2
+    pad_filter = f"pad={tw}:{th}:{thickness}:{thickness}:black"
+    # Per-pixel: if in border zone, paint rainbow; else pass through original
     geq_filter = (
-        f"geq=r='128+128*sin(2*PI*(X/{thickness}+T*0.5))':"
-        f"g='128+128*sin(2*PI*(X/{thickness}+T*0.5)+2*PI/3)':"
-        f"b='128+128*sin(2*PI*(X/{thickness}+T*0.5)+4*PI/3)'"
+        f"geq="
+        f"r='if(gt(X,{thickness})*lt(X,{tw-thickness})*gt(Y,{thickness})*lt(Y,{th-thickness}),r(X-{thickness},Y-{thickness}),128+128*sin(2*PI*(X*0.02+Y*0.005+T*0.7)))':"
+        f"g='if(gt(X,{thickness})*lt(X,{tw-thickness})*gt(Y,{thickness})*lt(Y,{th-thickness}),g(X-{thickness},Y-{thickness}),128+128*sin(2*PI*(X*0.02+Y*0.005+T*0.7)+2*PI/3))':"
+        f"b='if(gt(X,{thickness})*lt(X,{tw-thickness})*gt(Y,{thickness})*lt(Y,{th-thickness}),b(X-{thickness},Y-{thickness}),128+128*sin(2*PI*(X*0.02+Y*0.005+T*0.7)+4*PI/3))'"
     )
     await _run(
         "ffmpeg", "-y",
         "-i", input_path,
         "-vf", f"{pad_filter},{geq_filter}",
-        "-c:v", "libx264",
+        "-c:v", "libx264", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         output_path,
     )
 
 
 async def extract_frame(input_path: str, timestamp: float, output_path: str) -> None:
+    # Extract at 1280x720 — standard thumbnail dimensions
     await _run(
         "ffmpeg", "-y",
         "-ss", str(timestamp),
         "-i", input_path,
         "-frames:v", "1",
+        "-vf", "scale=1280:720:flags=lanczos",
         output_path,
     )
 
 
 async def detect_peak_motion_timestamp(input_path: str) -> float:
-    # Use scene change detection to find the most visually active moment
     out = await _run(
         "ffprobe", "-v", "quiet",
         "-print_format", "json",
@@ -108,7 +136,6 @@ async def detect_peak_motion_timestamp(input_path: str) -> float:
     data = json.loads(out)
     frames = data.get("frames", [])
 
-    # Find the first I-frame (scene change) after the 20% mark
     duration = await get_duration(input_path)
     min_ts = duration * 0.2
     for frame in frames:
