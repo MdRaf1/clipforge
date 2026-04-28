@@ -5,6 +5,9 @@ from ai.prompts.reviewer import REVIEWER_PROMPT, REVIEWER_SCHEMA
 from ai.prompts.modifier import MODIFIER_PROMPT
 from db.queries.settings import get_setting
 
+FULL_MIN_WORDS = 160
+FULL_MAX_WORDS = 185
+
 
 @dataclass
 class ScriptOutput:
@@ -21,6 +24,36 @@ class HumanInTheLoopPause(Exception):
         super().__init__(f"Script review stalled at score {score}: {user_summary}")
 
 
+def _word_count(text: str) -> int:
+    return len(text.split())
+
+
+async def _generate_full_script(client, mode: str, topic: str | None, footage_context: str, series_context: str | None) -> str:
+    """Generate initial full script and retry once if word count is too low."""
+    def _build_prompt() -> str:
+        ctx = footage_context or "gameplay footage"
+        if mode == "topic_guided":
+            p = TOPIC_GUIDED_PROMPT.format(topic=topic or "", footage_context=ctx)
+        else:
+            p = FULL_AI_PROMPT.format(footage_context=ctx)
+        if series_context:
+            p += f"\n\nPrevious episode context:\n{series_context}"
+        return p
+
+    script = await client.generate(_build_prompt())
+
+    # If too short, retry once with an explicit nudge
+    if _word_count(script) < FULL_MIN_WORDS:
+        nudge = (
+            f"\n\nIMPORTANT: The script above is too short ({_word_count(script)} words). "
+            f"Expand it to at least {FULL_MIN_WORDS} words by adding more detail, "
+            f"tension, or commentary. Keep the same story and tone."
+        )
+        script = await client.generate(_build_prompt() + nudge)
+
+    return script
+
+
 async def run_script_step(
     job_id: int,
     mode: str,  # full_ai | topic_guided | manual
@@ -28,25 +61,20 @@ async def run_script_step(
     raw_script: str | None = None,
     series_context: str | None = None,
     manual_override_script: bool = False,
+    footage_context: str | None = None,
 ) -> ScriptOutput:
     client = get_ai_client()
 
     approval_threshold = int(get_setting("approval_threshold") or 90)
     max_iterations = int(get_setting("max_reviewer_iterations") or 2)
 
+    footage_context = footage_context or "Minecraft gameplay footage"
+
     # --- Generate initial script ---
     if mode == "manual" or manual_override_script:
         initial_script = raw_script or ""
-    elif mode == "topic_guided":
-        prompt = TOPIC_GUIDED_PROMPT.format(topic=topic or "")
-        if series_context:
-            prompt += f"\n\nPrevious episode context:\n{series_context}"
-        initial_script = await client.generate(prompt)
-    else:  # full_ai
-        prompt = FULL_AI_PROMPT
-        if series_context:
-            prompt += f"\n\nPrevious episode context:\n{series_context}"
-        initial_script = await client.generate(prompt)
+    else:
+        initial_script = await _generate_full_script(client, mode, topic, footage_context, series_context)
 
     # --- Manual override: skip review loop entirely ---
     if manual_override_script:

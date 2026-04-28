@@ -198,12 +198,20 @@ async def run(job_id: int) -> None:
 async def _exec_script(job: dict, output_dir: str) -> dict:
     """Run the script step; handles HumanInTheLoopPause internally."""
     job_id = job["id"]
-    platform_flags = json.loads(job["platform_flags"])
 
     mode = job.get("generation_mode") or "full_ai"
     topic = job.get("topic")
     raw_script = job.get("raw_script")
     manual_override_script = bool(job.get("manual_override_script"))
+
+    # Derive footage context from filename so the AI knows what game it's writing for
+    footage = get_footage(job["footage_id"])
+    footage_context = None
+    if footage:
+        import os
+        fname = os.path.basename(footage.get("filename") or footage.get("path") or "")
+        if fname:
+            footage_context = f"Gameplay footage file: {fname}"
 
     while True:
         try:
@@ -213,6 +221,7 @@ async def _exec_script(job: dict, output_dir: str) -> dict:
                 topic=topic,
                 raw_script=raw_script,
                 manual_override_script=manual_override_script,
+                footage_context=footage_context,
             )
             return {"full": result.full, "short": result.short, "score": result.score}
 
