@@ -1,0 +1,108 @@
+/* Spotlight wizard overlay */
+.wizard-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 40;
+    pointer-events: auto;
+    transition: opacity 0.25s ease;
+}
+
+.wizard-spotlight {
+    position: absolute;
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.75),
+                0 0 0 4px #6366f1,
+                0 0 24px 4px rgba(99, 102, 241, 0.6);
+    transition: all 0.3s ease;
+    pointer-events: none;
+    z-index: 45;
+}
+
+.wizard-tooltip {
+    position: absolute;
+    max-width: 320px;
+    background: #1f2937;
+    color: #f9fafb;
+    padding: 16px 20px;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    z-index: 50;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.wizard-tooltip .wizard-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #a5b4fc;
+}
+
+.wizard-tooltip .wizard-required {
+    display: inline-block;
+    font-size: 10px;
+    background: #dc2626;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.wizard-tooltip .wizard-optional {
+    display: inline-block;
+    font-size: 10px;
+    background: #6b7280;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.wizard-tooltip-actions {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 12px;
+    gap: 8px;
+}
+
+.wizard-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: background 0.15s;
+}
+
+.wizard-btn-primary {
+    background: #6366f1;
+    color: white;
+}
+
+.wizard-btn-primary:hover {
+    background: #4f46e5;
+}
+
+.wizard-btn-skip {
+    background: transparent;
+    color: #9ca3af;
+}
+
+.wizard-btn-skip:hover {
+    color: #f9fafb;
+}
+
+.wizard-progress {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-top: 8px;
+}
+
+/* Drag-and-drop dropzone hover state */
+.dropzone-active {
+    border-color: #6366f1 !important;
+    background: rgba(99, 102, 241, 0.08);
+}
