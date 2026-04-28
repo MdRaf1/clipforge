@@ -1,9 +1,18 @@
+import asyncio
+import json
 import os
+
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
+
+MODEL = "gemma-4-31b-it"
+
+# Retry config for transient 503/429 errors
+_MAX_API_RETRIES = 6
+_BASE_BACKOFF = 2.0  # seconds; doubles each attempt (2, 4, 8, 16, 32, 64)
 
 _client: genai.Client | None = None
 
@@ -18,23 +27,43 @@ def _get_client() -> genai.Client:
     return _client
 
 
+def _is_retryable(exc: Exception) -> bool:
+    msg = str(exc)
+    return (
+        "503" in msg or "500" in msg or "429" in msg
+        or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg or "INTERNAL" in msg
+    )
+
+
 async def generate(prompt: str, response_schema: dict | None = None) -> str | dict:
     client = _get_client()
+    last_exc = None
 
-    if response_schema:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=response_schema,
-            ),
-        )
-        import json
-        return json.loads(response.text)
-    else:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        return response.text
+    for attempt in range(_MAX_API_RETRIES):
+        try:
+            if response_schema:
+                response = await client.aio.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=response_schema,
+                    ),
+                )
+                return json.loads(response.text)
+            else:
+                response = await client.aio.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                )
+                return response.text
+
+        except Exception as exc:
+            last_exc = exc
+            if _is_retryable(exc) and attempt < _MAX_API_RETRIES - 1:
+                wait = _BASE_BACKOFF * (2 ** attempt)
+                await asyncio.sleep(wait)
+            else:
+                raise
+
+    raise last_exc

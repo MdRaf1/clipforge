@@ -2,10 +2,9 @@ fastapi
 uvicorn[standard]
 google-genai
 google-cloud-texttospeech
-kokoro>=0.9.2
+edge-tts
 openai-whisper
 Pillow
 python-dotenv
 typer
 questionary
-python-multipart

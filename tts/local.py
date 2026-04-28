@@ -1,47 +1,57 @@
-import io
-import numpy as np
+import asyncio
+import tempfile
+import os
 
-# fmt: off
-KOKORO_VOICES = [
-    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jadzia",
-    "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river",
-    "af_sarah", "af_sky", "af_star", "af_v0", "af_v0belle",
-    "af_v0irulan", "af_v0nicola", "am_adam", "am_echo", "am_eric",
-    "am_fenrir", "am_fable", "am_liam", "am_michael", "am_onyx",
-    "am_orion", "am_puck", "am_santa", "am_v0adam", "am_v0gurney",
-    "bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel",
-    "bm_fable", "bm_george", "bm_lewis", "bm_liam", "bm_santa",
-    "ef_dora", "em_alex", "em_santa", "ff_siwis", "hf_alpha",
-    "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola",
-    "jf_alpha", "jf_gongitsune", "jf_nezuko", "jm_kumo",
+# edge-tts voices — English selection covering common use cases
+# Full list: run `edge-tts --list-voices` in the terminal
+EDGE_TTS_VOICES = [
+    "en-US-AndrewNeural",
+    "en-US-AndrewMultilingualNeural",
+    "en-US-AriaNeural",
+    "en-US-AvaNeural",
+    "en-US-AvaMultilingualNeural",
+    "en-US-BrianNeural",
+    "en-US-BrianMultilingualNeural",
+    "en-US-ChristopherNeural",
+    "en-US-EmmaNeural",
+    "en-US-EmmaMultilingualNeural",
+    "en-US-EricNeural",
+    "en-US-GuyNeural",
+    "en-US-JennyNeural",
+    "en-US-MichelleNeural",
+    "en-US-RogerNeural",
+    "en-US-SteffanNeural",
+    "en-GB-LibbyNeural",
+    "en-GB-MaisieNeural",
+    "en-GB-RyanNeural",
+    "en-GB-SoniaNeural",
+    "en-GB-ThomasNeural",
+    "en-AU-NatashaNeural",
+    "en-AU-WilliamNeural",
+    "en-CA-ClaraNeural",
+    "en-CA-LiamNeural",
 ]
-# fmt: on
 
-_pipeline = None
+DEFAULT_VOICE = "en-US-GuyNeural"
 
 
-def _get_pipeline(voice: str):
-    global _pipeline
-    if _pipeline is None:
-        from kokoro import KPipeline
+async def synthesize_async(text: str, voice: str) -> bytes:
+    """Async edge-tts synthesis — returns MP3 bytes."""
+    import edge_tts
 
-        lang = voice[:2] if len(voice) >= 2 else "a"
-        _pipeline = KPipeline(lang_code=lang)
-    return _pipeline
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def synthesize(text: str, voice: str) -> bytes:
-    pipeline = _get_pipeline(voice)
-    audio_chunks = []
-    for _, _, audio in pipeline(text, voice=voice):
-        audio_chunks.append(audio)
-
-    if not audio_chunks:
-        return b""
-
-    combined = np.concatenate(audio_chunks)
-    buf = io.BytesIO()
-    import soundfile as sf
-
-    sf.write(buf, combined, 24000, format="MP3")
-    return buf.getvalue()
+    """Sync wrapper — for use with run_in_executor."""
+    return asyncio.run(synthesize_async(text, voice))

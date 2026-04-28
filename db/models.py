@@ -88,7 +88,7 @@ DEFAULT_SETTINGS = [
     ("max_retries", "3"),
     ("default_platforms", '["youtube_shorts", "tiktok"]'),
     ("cloud_tts_voice", "en-US-Neural2-D"),
-    ("local_tts_voice", "af_heart"),
+    ("local_tts_voice", "en-US-GuyNeural"),
     ("available_cloud_voices", "[]"),
 ]
 

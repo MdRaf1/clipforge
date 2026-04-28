@@ -7,3 +7,14 @@ __pycache__/
 .DS_Store
 venv/
 .venv/
+
+# Large source footage — not needed in repo
+*.mp4
+*.mkv
+background_minecraft_video.mp4
+
+# Local IDE/tool config
+.claude/
+
+# Claude Code transcript artifacts
+2026-*-local-command-*.txt
