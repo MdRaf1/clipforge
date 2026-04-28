@@ -243,7 +243,23 @@ async def _exec_script(job: dict, output_dir: str) -> dict:
             if action == "stop":
                 raise RuntimeError("User stopped pipeline at review pause")
             elif action == "force_accept":
-                return {"full": pause.script, "short": pause.script, "score": pause.score}
+                # Accept the full script as-is, but still run the Tightener so the
+                # short variant is genuinely shorter (otherwise voiceover_full and
+                # voiceover_short would be identical).
+                from ai.providers import get_ai_client
+                from ai.prompts.generator import TIGHTENER_PROMPT
+                client = get_ai_client()
+                try:
+                    short_script = await client.generate(
+                        TIGHTENER_PROMPT.format(script=pause.script)
+                    )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Tightener failed on force_accept (%s); falling back to full script", e
+                    )
+                    short_script = pause.script
+                return {"full": pause.script, "short": short_script, "score": pause.score}
             elif action == "edit_resubmit":
                 raw_script = choice.get("edited_script", pause.script)
                 manual_override_script = False

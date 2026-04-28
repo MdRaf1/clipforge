@@ -5,8 +5,11 @@ from ai.prompts.reviewer import REVIEWER_PROMPT, REVIEWER_SCHEMA
 from ai.prompts.modifier import MODIFIER_PROMPT
 from db.queries.settings import get_setting
 
-FULL_MIN_WORDS = 160
-FULL_MAX_WORDS = 185
+FULL_MIN_WORDS = 230
+FULL_MAX_WORDS = 260
+SHORT_MIN_WORDS = 180
+SHORT_MAX_WORDS = 200
+MAX_RETRIES = 3
 
 
 @dataclass
@@ -29,7 +32,7 @@ def _word_count(text: str) -> int:
 
 
 async def _generate_full_script(client, mode: str, topic: str | None, footage_context: str, series_context: str | None) -> str:
-    """Generate initial full script and retry once if word count is too low."""
+    """Generate initial full script. Retry up to MAX_RETRIES if word count is below FULL_MIN_WORDS."""
     def _build_prompt() -> str:
         if mode == "topic_guided":
             p = TOPIC_GUIDED_PROMPT.format(topic=topic or "")
@@ -39,18 +42,51 @@ async def _generate_full_script(client, mode: str, topic: str | None, footage_co
             p += f"\n\nPrevious episode context:\n{series_context}"
         return p
 
-    script = await client.generate(_build_prompt())
+    last_script = ""
+    for attempt in range(MAX_RETRIES):
+        if attempt == 0:
+            script = await client.generate(_build_prompt())
+        else:
+            wc = _word_count(last_script)
+            expand_prompt = (
+                _build_prompt()
+                + f"\n\n⚠️ Your previous attempt was only {wc} words, which is too short. "
+                f"The script MUST be at least {FULL_MIN_WORDS} words. "
+                f"Rewrite it now, expanding with more vivid detail, additional tension beats, "
+                f"or supporting dialogue. Keep the same story arc and tone. "
+                f"Aim for {FULL_MIN_WORDS}-{FULL_MAX_WORDS} words."
+            )
+            script = await client.generate(expand_prompt)
 
-    # If too short, retry once with an explicit nudge
-    if _word_count(script) < FULL_MIN_WORDS:
-        nudge = (
-            f"\n\nIMPORTANT: The script above is too short ({_word_count(script)} words). "
-            f"Expand it to at least {FULL_MIN_WORDS} words by adding more detail, "
-            f"tension, or commentary. Keep the same story and tone."
-        )
-        script = await client.generate(_build_prompt() + nudge)
+        last_script = script
+        if _word_count(script) >= FULL_MIN_WORDS:
+            return script
 
-    return script
+    # Best effort after retries
+    return last_script
+
+
+async def _generate_short_script(client, full_script: str) -> str:
+    """Run the Tightener, retrying if output is outside the target range."""
+    last_script = ""
+    for attempt in range(MAX_RETRIES):
+        if attempt == 0:
+            prompt = TIGHTENER_PROMPT.format(script=full_script)
+        else:
+            wc = _word_count(last_script)
+            if wc < SHORT_MIN_WORDS:
+                guidance = f"Your previous attempt was {wc} words which is too short. Add back critical detail to reach {SHORT_MIN_WORDS}-{SHORT_MAX_WORDS} words."
+            else:
+                guidance = f"Your previous attempt was {wc} words which is too long. Cut more to reach {SHORT_MIN_WORDS}-{SHORT_MAX_WORDS} words."
+            prompt = TIGHTENER_PROMPT.format(script=full_script) + f"\n\n⚠️ {guidance}"
+
+        script = await client.generate(prompt)
+        last_script = script
+        wc = _word_count(script)
+        if SHORT_MIN_WORDS <= wc <= SHORT_MAX_WORDS:
+            return script
+
+    return last_script
 
 
 async def run_script_step(
@@ -106,8 +142,7 @@ async def run_script_step(
         )
         current_script = await client.generate(modifier_prompt)
 
-    # --- Tightener: produce short variant ---
-    tightener_prompt = TIGHTENER_PROMPT.format(script=current_script)
-    short_script = await client.generate(tightener_prompt)
+    # --- Tightener: produce short variant with word-count retries ---
+    short_script = await _generate_short_script(client, current_script)
 
     return ScriptOutput(full=current_script, short=short_script, score=last_score)

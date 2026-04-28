@@ -80,24 +80,32 @@ async def cut_footage(input_path: str, output_path: str, start: float, duration:
 
 async def stretch_audio_to_duration(input_path: str, output_path: str, target_duration: float) -> None:
     """
-    Time-stretch audio to hit target_duration using FFmpeg atempo.
-    atempo range is 0.5–2.0; we clamp to 0.75–1.25 for quality.
-    Beyond that range we leave the audio unchanged (better than distorting).
+    Time-stretch audio to hit EXACTLY target_duration using FFmpeg atempo.
+    atempo supports 0.5–2.0 per filter; we allow 0.85–1.30 for acceptable speech quality.
+    Ratios outside that range fall back to the boundary (distorted but still in range).
+    After stretch we apply `-t target_duration` to clamp to exact duration.
     """
     actual = await get_duration(input_path)
     if actual <= 0:
         raise ValueError("Audio has zero duration")
     ratio = actual / target_duration
-    ratio = max(0.75, min(1.25, ratio))
-    if abs(ratio - 1.0) < 0.005:
-        # Close enough — just copy
-        await _run("ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path)
+    # Clamp to quality-safe range; 0.85 = slow-down 15%, 1.30 = speed-up 30%
+    ratio = max(0.85, min(1.30, ratio))
+    if abs(ratio - 1.0) < 0.002:
+        # Close enough — just copy-encode without atempo
+        await _run(
+            "ffmpeg", "-y", "-i", input_path,
+            "-t", f"{target_duration:.6f}",
+            "-ar", "48000", "-b:a", "128k",
+            output_path,
+        )
         return
     await _run(
         "ffmpeg", "-y",
         "-i", input_path,
         "-filter:a", f"atempo={ratio:.6f}",
-        "-ar", "48000",
+        "-t", f"{target_duration:.6f}",
+        "-ar", "48000", "-b:a", "128k",
         output_path,
     )
 
@@ -138,63 +146,105 @@ async def burn_subtitles(input_path: str, srt_path: str, output_path: str) -> No
     )
 
 
-async def apply_rainbow_border(input_path: str, output_path: str, duration: float | None = None) -> None:
+def _render_progress_bar_frames(duration: float, out_dir: str, fps: int = TARGET_FPS) -> int:
     """
-    Fast rainbow border using a pre-rendered strip + crop/scroll.
-    Shrinks inner frame to 1048x1888, pads to 1080x1920, then overlays
-    4 border strips cropped from a scrolling 6000px rainbow PNG.
-    Each frame the crop offset advances so the rainbow completes one
-    full loop over the video duration. Runs ~2.5x realtime on CPU.
+    Render a PNG sequence of the progress bar at each frame.
 
-    Perimeter offsets per side (clockwise from top-left):
-      top=0, right=1080, bottom=3000, left=4080
+    Each PNG is a 1080×1920 transparent image with green border pixels filled
+    from top-center clockwise, reaching 100% at the final frame. Uses PIL.
+
+    FFmpeg drawbox expressions don't re-evaluate dynamic w/h per frame reliably,
+    so we pre-generate frames and overlay them as an image sequence.
+    Returns the total number of frames rendered.
     """
+    from PIL import Image, ImageDraw
+    import os as _os
+    _os.makedirs(out_dir, exist_ok=True)
+
+    W, H = TARGET_W, TARGET_H
+    B = BORDER
+    half_w = W // 2
+    total_frames = max(1, int(round(duration * fps)))
+
+    for i in range(total_frames):
+        progress = (i + 1) / total_frames  # fill by end of interval
+        filled = int(progress * PERIMETER)
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        remaining = filled
+
+        # A: top from x=540 to x=1080 (540px)
+        if remaining > 0:
+            px = min(remaining, half_w)
+            draw.rectangle([(half_w, 0), (half_w + px - 1, B - 1)], fill=(0, 255, 0, 255))
+            remaining -= px
+        # B: right edge top-down (1920px)
+        if remaining > 0:
+            px = min(remaining, H)
+            draw.rectangle([(W - B, 0), (W - 1, px - 1)], fill=(0, 255, 0, 255))
+            remaining -= px
+        # C: bottom right-to-left (1080px)
+        if remaining > 0:
+            px = min(remaining, W)
+            draw.rectangle([(W - px, H - B), (W - 1, H - 1)], fill=(0, 255, 0, 255))
+            remaining -= px
+        # D: left edge bottom-to-top (1920px)
+        if remaining > 0:
+            px = min(remaining, H)
+            draw.rectangle([(0, H - px), (B - 1, H - 1)], fill=(0, 255, 0, 255))
+            remaining -= px
+        # E: top-left half (540px)
+        if remaining > 0:
+            px = min(remaining, half_w)
+            draw.rectangle([(0, 0), (px - 1, B - 1)], fill=(0, 255, 0, 255))
+
+        img.save(_os.path.join(out_dir, f"f{i:05d}.png"))
+
+    return total_frames
+
+
+async def apply_progress_bar(input_path: str, output_path: str, duration: float | None = None) -> None:
+    """
+    Perimeter-traveling green progress bar. Starts at top-center, travels clockwise
+    around the frame, and completes a full loop exactly when the video ends.
+
+    Implementation: PIL pre-renders an RGBA frame sequence (transparent background
+    + green border pixels filled up to the current perimeter progress), then FFmpeg
+    overlays that sequence onto the video. This avoids FFmpeg `drawbox` limitations
+    where dynamic `w`/`h` expressions only evaluate once at init.
+    """
+    import tempfile
+    import shutil
+
     if duration is None:
         duration = await get_duration(input_path)
 
-    strip = _ensure_rainbow_strip()
-    fps = TARGET_FPS
-    total_frames = duration * fps
-    # pixels per frame so one full loop = PERIMETER pixels over total_frames
-    step = f"{PERIMETER}.0/{total_frames:.6f}"
-    W, H, B = TARGET_W, TARGET_H, BORDER
-    iw, ih = INNER_W, INNER_H
-    P = PERIMETER
+    tmp_dir = tempfile.mkdtemp(prefix="progbar_")
+    try:
+        loop = asyncio.get_event_loop()
+        total_frames = await loop.run_in_executor(
+            None, _render_progress_bar_frames, duration, tmp_dir, TARGET_FPS
+        )
+        pattern = os.path.join(tmp_dir, "f%05d.png")
 
-    # crop x for each side: base_offset + frame_advance, wrapped to strip width
-    def cx(offset: int) -> str:
-        return f"mod(trunc(n*({step}))+{offset},{P - W})"
+        await _run(
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-framerate", str(TARGET_FPS), "-i", pattern,
+            "-filter_complex", "[0:v][1:v]overlay=0:0:shortest=1",
+            "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-t", str(duration),
+            output_path,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    top_cx  = cx(0)
-    bot_cx  = cx(P // 2)          # opposite side starts halfway around
-    lft_cx  = cx(W)               # right side of top corner
-    rgt_cx  = cx(W + H - B + W)   # bottom corner
 
-    filter_complex = (
-        f"[1:v]scale={iw}:{ih}:flags=lanczos,pad={W}:{H}:{B}:{B}:black[base];"
-        f"[0:v]crop={W}:{B}:x='{top_cx}':y=0[top];"
-        f"[0:v]crop={W}:{B}:x='{bot_cx}':y=0[bot];"
-        f"[0:v]crop={B}:1:x='{lft_cx}':y=0,scale={B}:{ih}[lft];"
-        f"[0:v]crop={B}:1:x='{rgt_cx}':y=0,scale={B}:{ih}[rgt];"
-        f"[base][top]overlay=0:0[v1];"
-        f"[v1][bot]overlay=0:{H - B}[v2];"
-        f"[v2][lft]overlay=0:{B}[v3];"
-        f"[v3][rgt]overlay={W - B}:{B}[out]"
-    )
-
-    await _run(
-        "ffmpeg", "-y",
-        "-r", str(fps), "-loop", "1", "-i", strip,
-        "-i", input_path,
-        "-filter_complex", filter_complex,
-        "-map", "[out]",
-        "-map", "1:a?",
-        "-c:v", "libx264", "-preset", "ultrafast",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
-        "-t", str(duration),
-        output_path,
-    )
+# Backwards-compatible alias — pipeline code calls apply_rainbow_border
+apply_rainbow_border = apply_progress_bar
 
 
 async def extract_frame(input_path: str, timestamp: float, output_path: str) -> None:
