@@ -183,12 +183,240 @@
                 <span x-show="!submitting">Generate</span>
                 <span x-show="submitting">Starting pipeline...</span>
             </button>
-            <p x-show="lastJobId" class="mt-3 text-sm text-indigo-300">
+            <p x-show="lastJobId && !pipeline.jobId" class="mt-3 text-sm text-indigo-300">
                 Job started: <span x-text="lastJobId" class="font-mono"></span>
-                <span class="text-gray-500"> — live pipeline view arrives in step 9.</span>
             </p>
             <p x-show="errorMessage" class="mt-3 text-sm text-red-400" x-text="errorMessage"></p>
         </section>
+
+        <!-- Live pipeline progress -->
+        <section x-show="pipeline.jobId" x-cloak
+                 class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold">Pipeline</h2>
+                <span class="text-xs text-gray-400">
+                    Job <span class="font-mono" x-text="pipeline.jobId"></span> —
+                    <span x-show="pipeline.running" class="text-indigo-300">running</span>
+                    <span x-show="!pipeline.running && pipeline.complete" class="text-emerald-300">complete</span>
+                    <span x-show="!pipeline.running && !pipeline.complete && pipeline.error" class="text-red-400">error</span>
+                    <span x-show="!pipeline.running && !pipeline.complete && !pipeline.error" class="text-gray-400">disconnected</span>
+                </span>
+            </div>
+
+            <p x-show="pipeline.error" class="text-sm text-red-400 mb-3" x-text="pipeline.error"></p>
+
+            <ol class="space-y-2">
+                <template x-for="step in pipeline.steps" :key="step.step_name">
+                    <li class="flex items-center gap-3 p-2 rounded-md bg-gray-800">
+                        <span class="w-5 text-center">
+                            <template x-if="step.status === 'done'"><span class="text-emerald-400">&#10003;</span></template>
+                            <template x-if="step.status === 'in_progress'"><span class="text-indigo-400 animate-pulse">&#9679;</span></template>
+                            <template x-if="step.status === 'failed'"><span class="text-red-400">&#10007;</span></template>
+                            <template x-if="step.status === 'pending'"><span class="text-gray-500">&#9675;</span></template>
+                        </span>
+                        <span class="flex-1 text-sm" x-text="stepLabels[step.step_name] || step.step_name"></span>
+                        <span x-show="step.status === 'in_progress'" class="text-xs text-indigo-300">working…</span>
+                        <span x-show="step.status === 'failed' && step.message" class="text-xs text-red-400 truncate max-w-xs"
+                              x-text="step.message" :title="step.message"></span>
+                    </li>
+                </template>
+            </ol>
+        </section>
+
+        <!-- Review pause (human-in-the-loop) -->
+        <section x-show="review.active" x-cloak
+                 class="bg-amber-950/40 rounded-xl p-6 border border-amber-700">
+            <h2 class="text-lg font-semibold mb-2 text-amber-200">Reviewer needs your call</h2>
+            <p class="text-sm text-amber-100 mb-3">
+                Current score: <span class="font-mono" x-text="review.score"></span> —
+                <span x-text="review.summary"></span>
+            </p>
+
+            <label class="text-xs text-amber-200 block mb-1">Current script (editable)</label>
+            <textarea x-model="review.editedScript" rows="8"
+                      class="w-full bg-gray-900 border border-amber-700 rounded-md px-3 py-2 text-sm font-mono"></textarea>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
+                <button @click="submitReviewChoice('continue')" :disabled="review.submitting"
+                        class="px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-sm disabled:opacity-50">
+                    Continue iterating
+                </button>
+                <button @click="submitReviewChoice('edit_resubmit')" :disabled="review.submitting"
+                        class="px-3 py-2 rounded-md bg-indigo-700 hover:bg-indigo-600 text-sm disabled:opacity-50">
+                    Edit + resubmit
+                </button>
+                <button @click="submitReviewChoice('force_accept')" :disabled="review.submitting"
+                        class="px-3 py-2 rounded-md bg-emerald-700 hover:bg-emerald-600 text-sm disabled:opacity-50">
+                    Force accept
+                </button>
+                <button @click="submitReviewChoice('stop')" :disabled="review.submitting"
+                        class="px-3 py-2 rounded-md bg-red-700 hover:bg-red-600 text-sm disabled:opacity-50">
+                    Stop pipeline
+                </button>
+            </div>
+        </section>
+
+        <!-- Outputs reveal -->
+        <section x-show="pipeline.complete && outputs.jobId" x-cloak
+                 x-transition.opacity
+                 class="bg-gray-900 rounded-xl p-6 border border-emerald-800">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-emerald-300">Outputs ready</h2>
+                <div class="flex gap-2">
+                    <a :href="outputs.zipUrl" download
+                       class="text-sm px-3 py-1.5 rounded-md bg-emerald-700 hover:bg-emerald-600">
+                        Download all (ZIP)
+                    </a>
+                    <button @click="openOutputFolder()"
+                            class="text-sm px-3 py-1.5 rounded-md bg-gray-800 hover:bg-gray-700">
+                        Open folder
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4">
+                <div>
+                    <p class="text-xs text-gray-400 mb-1">Full (65–75s) — TikTok / Facebook</p>
+                    <video :src="outputs.videoFullUrl" controls
+                           class="w-full rounded-md bg-black"></video>
+                    <a :href="outputs.videoFullUrl" download
+                       class="inline-block mt-2 text-xs text-indigo-300 hover:text-indigo-200">Download video_full.mp4</a>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400 mb-1">Short (50–58s) — YouTube / Instagram</p>
+                    <video :src="outputs.videoShortUrl" controls
+                           class="w-full rounded-md bg-black"></video>
+                    <a :href="outputs.videoShortUrl" download
+                       class="inline-block mt-2 text-xs text-indigo-300 hover:text-indigo-200">Download video_short.mp4</a>
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <p class="text-xs text-gray-400 mb-1">Thumbnail</p>
+                <img :src="outputs.thumbnailUrl" alt="Generated thumbnail"
+                     class="max-w-xs rounded-md border border-gray-800">
+                <a :href="outputs.thumbnailUrl" download
+                   class="inline-block mt-2 text-xs text-indigo-300 hover:text-indigo-200">Download thumbnail.jpg</a>
+            </div>
+
+            <div class="mt-6 space-y-4">
+                <p class="text-xs text-gray-400">Platform metadata</p>
+                <template x-for="m in selectedPlatformMetadata()" :key="m.id">
+                    <div class="bg-gray-800 rounded-md p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-sm font-semibold" x-text="m.label"></h3>
+                        </div>
+                        <div class="space-y-2">
+                            <div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-xs text-gray-400">Title</label>
+                                    <button @click="copyToClipboard(m.title, m.label + ' title')"
+                                            class="text-xs text-indigo-300 hover:text-indigo-200">Copy</button>
+                                </div>
+                                <p class="text-sm mt-1" x-text="m.title"></p>
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-xs text-gray-400">Description</label>
+                                    <button @click="copyToClipboard(m.description, m.label + ' description')"
+                                            class="text-xs text-indigo-300 hover:text-indigo-200">Copy</button>
+                                </div>
+                                <p class="text-sm mt-1 whitespace-pre-wrap" x-text="m.description"></p>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <p x-show="selectedPlatformMetadata().length === 0" class="text-xs text-gray-500">
+                    No platform metadata available.
+                </p>
+            </div>
+        </section>
+
+        <!-- History panel -->
+        <section id="section-history" class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-lg font-semibold">History</h2>
+                <button @click="loadHistory()" class="text-xs text-gray-400 hover:text-gray-200">Refresh</button>
+            </div>
+
+            <p x-show="history.loading" class="text-xs text-gray-500">Loading…</p>
+            <p x-show="!history.loading && history.items.length === 0" class="text-xs text-gray-500">
+                No sessions yet. Generate one above.
+            </p>
+
+            <ul class="divide-y divide-gray-800">
+                <template x-for="item in history.items" :key="item.id">
+                    <li class="py-2 flex items-center justify-between">
+                        <button @click="openHistoryDetail(item.id)"
+                                class="flex-1 text-left hover:text-indigo-300">
+                            <span class="text-sm" x-text="item.title"></span>
+                            <span class="text-xs text-gray-500 ml-2" x-text="formatDate(item.created_at)"></span>
+                            <span x-show="item.status && item.status !== 'complete'"
+                                  class="ml-2 text-xs text-amber-400"
+                                  x-text="'(' + item.status + ')'"></span>
+                        </button>
+                        <button @click="requestHistoryDelete(item.id, item.title)"
+                                class="text-xs text-red-400 hover:text-red-300 px-2 py-1">
+                            Delete
+                        </button>
+                    </li>
+                </template>
+            </ul>
+        </section>
+
+        <!-- History detail panel -->
+        <section x-show="history.detail" x-cloak
+                 class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold" x-text="history.detail?.title"></h2>
+                <button @click="closeHistoryDetail()"
+                        class="text-xs text-gray-400 hover:text-gray-200">Close</button>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">
+                <span x-text="formatDate(history.detail?.created_at)"></span> —
+                status <span x-text="history.detail?.status"></span>
+            </p>
+
+            <template x-if="history.detail?.status === 'complete'">
+                <div>
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <video :src="history.detail.videoFullUrl" controls class="w-full rounded-md bg-black"></video>
+                        <video :src="history.detail.videoShortUrl" controls class="w-full rounded-md bg-black"></video>
+                    </div>
+                    <img :src="history.detail.thumbnailUrl" alt="Thumbnail"
+                         class="mt-4 max-w-xs rounded-md border border-gray-800">
+                    <div class="mt-4">
+                        <a :href="history.detail.zipUrl" download
+                           class="text-xs px-3 py-1.5 rounded-md bg-emerald-700 hover:bg-emerald-600">
+                            Download all (ZIP)
+                        </a>
+                    </div>
+                </div>
+            </template>
+        </section>
+
+        <!-- Delete warning modal -->
+        <div x-show="history.deleteTargetId !== null" x-cloak
+             class="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+            <div class="bg-gray-900 rounded-xl p-6 border border-red-800 max-w-md mx-4">
+                <h3 class="text-lg font-semibold text-red-300 mb-2">Delete this session?</h3>
+                <p class="text-sm text-gray-300 mb-4">
+                    All associated files will be permanently removed from disk, including the
+                    generated videos, thumbnail, and metadata.
+                </p>
+                <p class="text-sm text-gray-400 mb-4">
+                    Target: <span class="font-mono" x-text="history.deleteTargetTitle"></span>
+                </p>
+                <div class="flex justify-end gap-2">
+                    <button @click="cancelHistoryDelete()"
+                            class="px-3 py-1.5 rounded-md bg-gray-800 hover:bg-gray-700 text-sm">Cancel</button>
+                    <button @click="confirmHistoryDelete()"
+                            class="px-3 py-1.5 rounded-md bg-red-700 hover:bg-red-600 text-sm">
+                        Delete permanently
+                    </button>
+                </div>
+            </div>
+        </div>
 
     </main>
 
@@ -196,6 +424,8 @@
     <div id="wizard-root"></div>
 
     <script src="/js/app.js"></script>
+    <script src="/js/pipeline.js"></script>
+    <script src="/js/history.js"></script>
     <script src="/js/wizard.js"></script>
 </body>
 </html>

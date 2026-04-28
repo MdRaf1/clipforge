@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from db.models import init_db
 from db.connection import get_db
 from api import jobs, footage, settings, series, history, ws
+from config import OUTPUTS_DIR
 import os
 
 
@@ -25,6 +26,10 @@ app.include_router(settings.router)
 app.include_router(series.router)
 app.include_router(history.router)
 app.include_router(ws.router)
+
+# Serve generated outputs so the browser can load videos, thumbnails, and metadata.
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
+app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
 
 # Serve frontend static files if the directory exists
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")

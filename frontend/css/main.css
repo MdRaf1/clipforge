@@ -1,3 +1,6 @@
+/* Hide elements flagged with x-cloak until Alpine initialises them. */
+[x-cloak] { display: none !important; }
+
 /* Spotlight wizard overlay */
 .wizard-backdrop {
     position: fixed;
