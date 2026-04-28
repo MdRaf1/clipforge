@@ -78,6 +78,30 @@ async def cut_footage(input_path: str, output_path: str, start: float, duration:
     )
 
 
+async def stretch_audio_to_duration(input_path: str, output_path: str, target_duration: float) -> None:
+    """
+    Time-stretch audio to hit target_duration using FFmpeg atempo.
+    atempo range is 0.5–2.0; we clamp to 0.75–1.25 for quality.
+    Beyond that range we leave the audio unchanged (better than distorting).
+    """
+    actual = await get_duration(input_path)
+    if actual <= 0:
+        raise ValueError("Audio has zero duration")
+    ratio = actual / target_duration
+    ratio = max(0.75, min(1.25, ratio))
+    if abs(ratio - 1.0) < 0.005:
+        # Close enough — just copy
+        await _run("ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path)
+        return
+    await _run(
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-filter:a", f"atempo={ratio:.6f}",
+        "-ar", "48000",
+        output_path,
+    )
+
+
 async def assemble_video(video_path: str, audio_path: str, output_path: str) -> None:
     """Mux footage video + voiceover audio."""
     await _run(

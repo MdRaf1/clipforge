@@ -31,11 +31,10 @@ def _word_count(text: str) -> int:
 async def _generate_full_script(client, mode: str, topic: str | None, footage_context: str, series_context: str | None) -> str:
     """Generate initial full script and retry once if word count is too low."""
     def _build_prompt() -> str:
-        ctx = footage_context or "gameplay footage"
         if mode == "topic_guided":
-            p = TOPIC_GUIDED_PROMPT.format(topic=topic or "", footage_context=ctx)
+            p = TOPIC_GUIDED_PROMPT.format(topic=topic or "")
         else:
-            p = FULL_AI_PROMPT.format(footage_context=ctx)
+            p = FULL_AI_PROMPT
         if series_context:
             p += f"\n\nPrevious episode context:\n{series_context}"
         return p

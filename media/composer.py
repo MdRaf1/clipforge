@@ -444,6 +444,9 @@ def build_progress_bar_clip(video_duration: float, frame_width: int) -> VideoCli
     Perimeter-traveling progress bar that starts at top-center, travels clockwise
     around the frame border, and returns to top-center when the video ends.
 
+    Returns an RGB VideoClip + separate greyscale mask so the black interior
+    stays fully transparent over the background video.
+
     Perimeter segments (clockwise from top-center):
       A: top-center → top-right   (W/2 px)
       B: top-right  → bot-right   (H px)
@@ -458,50 +461,60 @@ def build_progress_bar_clip(video_duration: float, frame_width: int) -> VideoCli
     color = np.array(PROGRESS_BAR_COLOR, dtype=np.uint8)
     total_perim = 2 * W + 2 * H
 
-    def make_frame(t: float) -> np.ndarray:
-        frame = np.zeros((H, W, 3), dtype=np.uint8)
+    def _draw(t: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return (rgb_frame, mask_frame) where mask=1.0 means opaque."""
+        rgb = np.zeros((H, W, 3), dtype=np.uint8)
+        mask = np.zeros((H, W), dtype=np.float32)
         progress = max(0.0, min(float(t), video_duration)) / max(video_duration, 1e-9)
         filled = int(progress * total_perim)
-
         remaining = filled
 
-        # A: top edge, left half → right  (top-center to top-right)
+        # A: top edge, top-center → top-right
         seg_a = W // 2
         if remaining > 0:
             px = min(remaining, seg_a)
-            # starts at x = W//2, goes right to W
-            frame[0:B, W // 2 : W // 2 + px] = color
+            rgb[0:B, W // 2: W // 2 + px] = color
+            mask[0:B, W // 2: W // 2 + px] = 1.0
             remaining -= px
 
         # B: right edge, top → bottom
-        seg_b = H
         if remaining > 0:
-            px = min(remaining, seg_b)
-            frame[0:px, W - B : W] = color
+            px = min(remaining, H)
+            rgb[0:px, W - B: W] = color
+            mask[0:px, W - B: W] = 1.0
             remaining -= px
 
         # C: bottom edge, right → left
-        seg_c = W
         if remaining > 0:
-            px = min(remaining, seg_c)
-            frame[H - B : H, W - px : W] = color
+            px = min(remaining, W)
+            rgb[H - B: H, W - px: W] = color
+            mask[H - B: H, W - px: W] = 1.0
             remaining -= px
 
         # D: left edge, bottom → top
-        seg_d = H
         if remaining > 0:
-            px = min(remaining, seg_d)
-            frame[H - px : H, 0:B] = color
+            px = min(remaining, H)
+            rgb[H - px: H, 0:B] = color
+            mask[H - px: H, 0:B] = 1.0
             remaining -= px
 
         # E: top edge, left → top-center
         if remaining > 0:
             px = min(remaining, W // 2)
-            frame[0:B, 0:px] = color
+            rgb[0:B, 0:px] = color
+            mask[0:B, 0:px] = 1.0
 
-        return frame
+        return rgb, mask
 
-    return VideoClip(make_frame, duration=video_duration).with_position((0, 0))
+    def make_frame(t: float) -> np.ndarray:
+        return _draw(t)[0]
+
+    def make_mask(t: float) -> np.ndarray:
+        return _draw(t)[1]
+
+    bar = VideoClip(make_frame, duration=video_duration)
+    bar.mask = VideoClip(make_mask, duration=video_duration, is_mask=True)
+    return bar.with_position((0, 0))
 
 
 def build_watermark_clip(channel_handle: str, video_duration: float) -> TextClip:
