@@ -1,37 +1,12 @@
 import asyncio
 import json
-import math
 import os
 
 TARGET_W = 1080
 TARGET_H = 1920
 TARGET_FPS = 30
 BORDER = 16
-INNER_W = TARGET_W - BORDER * 2   # 1048
-INNER_H = TARGET_H - BORDER * 2   # 1888
 PERIMETER = 2 * (TARGET_W + TARGET_H)  # 6000
-
-# Pre-generated rainbow strip path — built once, reused for all jobs
-_RAINBOW_STRIP = os.path.join(os.path.dirname(__file__), "_rainbow_strip.png")
-
-
-def _ensure_rainbow_strip() -> str:
-    """Generate a 6000x16 full-saturation rainbow PNG if it doesn't exist yet."""
-    if os.path.exists(_RAINBOW_STRIP):
-        return _RAINBOW_STRIP
-    from PIL import Image
-    img = Image.new("RGB", (PERIMETER, BORDER))
-    for x in range(PERIMETER):
-        h = x / PERIMETER
-        i = int(h * 6)
-        f = h * 6 - i
-        q, t_v = 1 - f, f
-        r, g, b = [(1, t_v, 0), (q, 1, 0), (0, 1, t_v), (0, q, 1), (t_v, 0, 1), (1, 0, q)][i % 6]
-        rgb = (int(r * 255), int(g * 255), int(b * 255))
-        for y in range(BORDER):
-            img.putpixel((x, y), rgb)
-    img.save(_RAINBOW_STRIP)
-    return _RAINBOW_STRIP
 
 
 async def _run(*args: str) -> str:

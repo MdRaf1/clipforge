@@ -8,7 +8,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = "gemma-4-31b-it"
+# Model selection.
+# - "gemma-4-31b-it" — our current default. Generous free-tier rate limit and strong
+#   at script-style generation. Recommended for local/hackathon single-user use.
+# - "gemini-pro-latest" — alias pointing to Google's most capable Gemini model at any
+#   given time. Swap in if you want maximum quality and have paid-tier quota.
+# Override at runtime with the CLIPFORGE_MODEL env var.
+MODEL = os.getenv("CLIPFORGE_MODEL", "gemma-4-31b-it")
 
 # Retry config for transient 503/429 errors
 _MAX_API_RETRIES = 6
