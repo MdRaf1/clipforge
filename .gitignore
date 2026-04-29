@@ -18,3 +18,7 @@ background_minecraft_video.mp4
 
 # Claude Code transcript artifacts
 2026-*-local-command-*.txt
+
+# Private hackathon artifacts — planning docs and process notes
+docs/
+process-notes.md

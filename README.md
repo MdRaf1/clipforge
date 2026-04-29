@@ -2,9 +2,9 @@
 
 # ClipForge
 
-**Raw gameplay in. Four platform-ready viral videos out. One click.**
+**One story in. Four platform-ready viral videos out. One click.**
 
-An automated pipeline that turns unedited gaming footage into platform-compliant short-form video packages — script, voiceover, cuts, subtitles, thumbnail, and per-platform metadata — for YouTube Shorts, TikTok, Instagram Reels, and Facebook Reels.
+An automated pipeline for content creators and story writers that turns a topic or script — paired with any looping background footage for retention — into platform-compliant short-form video packages. Script, voiceover, cuts, subtitles, thumbnail, and per-platform metadata for YouTube Shorts, TikTok, Instagram Reels, and Facebook Reels.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -17,13 +17,13 @@ An automated pipeline that turns unedited gaming footage into platform-compliant
 
 ## Why
 
-Solo gaming creators who want to post viral short-form content spend hours per video on manual editing — scripting, voiceover, cutting, subtitles, thumbnail, metadata, then reformatting for every platform. Tools like Descript and HeyGen exist for general content, but none are built specifically for gameplay footage.
+Content creators and story writers who want to post viral short-form video spend hours per piece on manual editing — scripting, voiceover, cutting, subtitles, thumbnail, metadata, and then reformatting for every platform. The loop of "write a story → turn it into four platform-ready videos" has no good end-to-end tool. Gameplay footage is the retention layer that keeps eyes on the screen while the story plays.
 
-ClipForge closes that gap. You drop in a clip. It does the rest.
+ClipForge closes that gap. You bring the story. It does the rest.
 
 ## What it does
 
-Give it a gameplay clip (MP4/MKV) and a generation mode. It produces:
+Give it looping background footage (MP4/MKV) and a generation mode. It produces:
 
 - **Two videos** — `video_full.mp4` (65-75 s, for TikTok + Facebook Reels) and `video_short.mp4` (50-58 s, for YouTube Shorts + Instagram Reels)
 - **One thumbnail** with AI-generated hook text overlay
@@ -53,7 +53,7 @@ Generator ─▶ Reviewer ─▶ [score ≥ threshold?] ─▶ Approved
                 └─▶ Tightener ─▶ Short variant (50-58 s)
 ```
 
-- **Generator** writes the script from a topic or gameplay context
+- **Generator** writes the script from a topic (or from scratch, if you pick Full AI)
 - **Reviewer** scores it (0-100 composite: hook strength, pacing, retention risk) and emits structured rewrite directives as JSON
 - **Modifier** rewrites based on the directives
 - **Tightener** produces the shorter platform variant after approval
@@ -82,7 +82,7 @@ All four agents are the same underlying model. They're differentiated only by pr
 ### Prerequisites
 - Python **3.11 or newer**
 - **FFmpeg** installed and on `PATH` (both `ffmpeg` and `ffprobe` commands)
-- A **Google Gemini / Gemma API key** (free at [aistudio.google.com](https://aistudio.google.com/app/apikey))
+- A **Google Gemini API key** (free at [aistudio.google.com](https://aistudio.google.com/app/apikey))
 - *(Optional)* A **Google Cloud service account JSON** if you want Google Cloud TTS. Without it, ClipForge falls back to free edge-tts.
 
 ### Install
@@ -125,35 +125,6 @@ python cli.py run
 ```
 
 Interactive terminal walkthrough — arrow-key pickers for footage, mode, platforms, and series. All features in the web UI are available here.
-
-## How a job flows
-
-```
-         ┌────────────────────────────┐
-         │  POST /api/jobs            │   (or cli.py run)
-         └────────────┬───────────────┘
-                      │ creates job + 11 job_steps rows (all pending)
-                      ▼
-         ┌────────────────────────────┐
-         │  asyncio background task   │
-         │  pipeline/runner.py        │
-         └────────────┬───────────────┘
-                      │ pushes step events to an asyncio queue
-                      ▼
-                      │   ┌───────────────────────────────────┐
-                      └──▶│  WebSocket /ws/jobs/{job_id}     │
-                          │  • state_sync on connect         │
-                          │  • step_update per transition    │
-                          │  • review_pause if stalled       │
-                          │  • complete on finish             │
-                          └───────────────────────────────────┘
-
-Pipeline steps, in order:
-  script → voiceover (×2) → cutting (×2) → subtitles (×2)
-    → render (×2) → thumbnail → metadata
-```
-
-**Each step is checkpointed** to the `job_steps` table with its output. If the app crashes mid-run, startup marks `in_progress` jobs as `interrupted` and the user can explicitly resume from the last completed step — no auto-resume crash loops.
 
 ## Project structure
 
@@ -211,55 +182,8 @@ clipforge/
 │       ├── pipeline.js      WebSocket client + output reveal
 │       └── history.js       History panel + delete flow
 │
-├── docs/                    Hackathon artifacts (see below)
 └── data/                    gitignored — runtime database + outputs + footage
 ```
-
-## The `docs/` folder — spec-driven development artifacts
-
-ClipForge was built using a structured spec-driven development process. These aren't throw-away — they're the full paper trail from idea to working code:
-
-| File | What's in it |
-|---|---|
-| [`docs/learner-profile.md`](docs/learner-profile.md) | Who I am, my experience level, and learning goals |
-| [`docs/scope.md`](docs/scope.md) | The initial idea, who it's for, what's in/out of scope |
-| [`docs/prd.md`](docs/prd.md) | User stories, acceptance criteria, non-goals, open questions |
-| [`docs/spec.md`](docs/spec.md) | Technical architecture, data model, API, pipeline details |
-| [`docs/checklist.md`](docs/checklist.md) | Step-by-step build plan (11 items, all complete) |
-
-Each of scope, PRD, spec, and checklist has an **"Actual Implementation — Divergences from Plan"** section at the end that tracks where the shipped code differs from the plan, and why. The plans are preserved as-written — the divergence logs are the interesting part.
-
-## Notable engineering decisions
-
-<details>
-<summary><strong>WebSocket state-sync on connect</strong> — eliminates a race condition with fast-completing jobs</summary>
-
-Without this, if any pipeline step completes or fails before the frontend WebSocket connection is established, those events are lost. The fix: when a client connects to `/ws/jobs/{job_id}`, the server immediately queries the `job_steps` table and pushes a `state_sync` event with the current status of all 11 steps — then subscribes to the live event queue. The frontend always gets full state on connect regardless of timing.
-</details>
-
-<details>
-<summary><strong>User-controlled resume — no auto-resume</strong> — prevents crash loops</summary>
-
-On startup, all `in_progress` jobs are marked `interrupted`. The UI shows a Resume button. The user explicitly clicks it to restart from the last completed step. This matters because if a job caused the crash (e.g., FFmpeg OOM on a large file), auto-resume would just crash again. Putting the human in the loop gives them a chance to close other processes or reduce load first.
-</details>
-
-<details>
-<summary><strong>Platform deduplication — 4 platforms, 2 video files</strong></summary>
-
-All four target platforms share identical codec (H.264) and resolution (1080×1920). The only things that genuinely differ are target duration (YouTube/Instagram: 50-58 s; TikTok/Facebook: 65-75 s) and metadata (title/description character limits). So the pipeline generates exactly two video files — `video_full.mp4` and `video_short.mp4` — and four metadata entries. Saves CPU, disk, and time.
-</details>
-
-<details>
-<summary><strong>Perimeter progress bar instead of rainbow border</strong></summary>
-
-The original spec called for an animated rainbow gradient border using FFmpeg's `geq` filter. That filter turned out to be impossibly slow at render time. The shipped implementation is a green progress bar that fills clockwise around the frame perimeter and reaches 100% exactly when the video ends. Same retention-hook purpose, 150× faster to render, and arguably more useful — it tells viewers how far through they are.
-</details>
-
-<details>
-<summary><strong>Voiceover time-stretching for deterministic duration</strong></summary>
-
-TTS output rarely matches the exact target duration. The voiceover step synthesises each track, then uses FFmpeg `atempo` (clamped to 0.85-1.30 to preserve speech quality) to stretch audio to exact targets: 70 s for the full track, 54 s for the short. Final duration is clamped with `-t` for precision. This keeps platform duration compliance deterministic regardless of script length variance.
-</details>
 
 ## Roadmap
 
@@ -276,17 +200,10 @@ Things that are out of scope for v1 but naturally follow:
 
 This project is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE) for the full text.
 
-The short version: you can use, modify, and redistribute this code freely, but if you run a modified version as a network service, you must make your source code available to users of that service.
-
-## Acknowledgements
-
-- Built using the [hackathon-in-a-plugin](https://github.com/anthropics/hackathon-in-a-plugin) spec-driven development workflow (scope → PRD → spec → checklist → build)
-- AI coding assistance from [Claude Code](https://claude.com/claude-code)
-
 ---
 
 <div align="center">
 
-Built by <a href="https://github.com/MdRaf1">MdRaf1</a> · Submit an issue on the <a href="https://github.com/MdRaf1/clipforge/issues">tracker</a>
+Built by <a href="https://github.com/MdRaf1">Rafi</a> · Submit an issue on the <a href="https://github.com/MdRaf1/clipforge/issues">tracker</a>
 
 </div>
